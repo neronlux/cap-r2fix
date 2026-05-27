@@ -1,9 +1,16 @@
-import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+	readdirSync,
+	readFileSync,
+	renameSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
+import { basename, dirname, join } from "node:path";
 
 const root = process.env.CAP_WEB_IMAGE_ROOT ?? "/app";
 
 const targetExtensions = new Set([".js", ".mjs", ".cjs"]);
+const textExtensions = new Set([...targetExtensions, ".json", ".html", ".txt"]);
 const markerPattern =
 	/createUploadTargetFor(?:User|Video)|\.createUploadTarget\(/;
 const callPattern =
@@ -19,16 +26,23 @@ function hasTargetExtension(path) {
 	return false;
 }
 
-function walk(directory, files = []) {
+function hasTextExtension(path) {
+	for (const extension of textExtensions) {
+		if (path.endsWith(extension)) return true;
+	}
+	return false;
+}
+
+function walk(directory, files = [], filter = hasTargetExtension) {
 	for (const entry of readdirSync(directory, { withFileTypes: true })) {
 		const path = join(directory, entry.name);
 		if (entry.isDirectory()) {
 			if (entry.name === "node_modules" || entry.name === ".git") continue;
-			walk(path, files);
+			walk(path, files, filter);
 			continue;
 		}
 
-		if (entry.isFile() && hasTargetExtension(path)) files.push(path);
+		if (entry.isFile() && filter(path)) files.push(path);
 	}
 
 	return files;
@@ -267,10 +281,68 @@ function patchOfficialCompiledEmailSource(source) {
 	return { output, replacements };
 }
 
+function isStaticChunk(path) {
+	return (
+		path.includes("/apps/web/.next/static/chunks/") && path.endsWith(".js")
+	);
+}
+
+function cacheBustedChunkName(file) {
+	const name = basename(file);
+	if (name.endsWith(".r2fix.js")) return null;
+	return name.replace(/\.js$/, ".r2fix.js");
+}
+
+function cacheBustStaticChunks(files) {
+	const uniqueFiles = [...new Set(files)].filter(isStaticChunk);
+	const renames = [];
+
+	for (const file of uniqueFiles) {
+		const newName = cacheBustedChunkName(file);
+		if (!newName) continue;
+
+		const oldName = basename(file);
+		const newPath = join(dirname(file), newName);
+		renames.push({ oldName, newName, oldPath: file, newPath });
+	}
+
+	if (renames.length === 0) return 0;
+
+	if (!dryRun) {
+		for (const file of walk(root, [], hasTextExtension)) {
+			const { size } = statSync(file);
+			if (size > 20 * 1024 * 1024) continue;
+
+			let source = readFileSync(file, "utf8");
+			let changed = false;
+			for (const { oldName, newName } of renames) {
+				if (!source.includes(oldName)) continue;
+				source = source.split(oldName).join(newName);
+				changed = true;
+			}
+			if (changed) writeFileSync(file, source);
+		}
+
+		for (const { oldPath, newPath } of renames) {
+			renameSync(oldPath, newPath);
+		}
+	}
+
+	for (const { oldPath, newPath } of renames) {
+		console.log(
+			`${dryRun ? "would cache-bust" : "cache-busted"} static chunk: ${oldPath.replace(root, "")} -> ${newPath.replace(root, "")}`,
+		);
+	}
+
+	return renames.length;
+}
+
 let filesScanned = 0;
 let filesWithMarkers = 0;
 let filesChanged = 0;
 let totalReplacements = 0;
+let cacheBustedStaticChunks = 0;
+const changedStaticChunks = [];
 
 for (const file of walk(root)) {
 	const { size } = statSync(file);
@@ -291,6 +363,7 @@ for (const file of walk(root)) {
 		emailPatch.replacements;
 	if (replacements > 0) {
 		if (!dryRun) writeFileSync(file, output);
+		if (isStaticChunk(file)) changedStaticChunks.push(file);
 		filesChanged += 1;
 		totalReplacements += replacements;
 		console.log(
@@ -312,6 +385,7 @@ for (const file of walk(root)) {
 	const replacements = compiledPatch.replacements + emailPatch.replacements;
 	if (replacements > 0) {
 		if (!dryRun) writeFileSync(file, output);
+		if (isStaticChunk(file)) changedStaticChunks.push(file);
 		filesChanged += 1;
 		totalReplacements += replacements;
 		console.log(
@@ -319,6 +393,8 @@ for (const file of walk(root)) {
 		);
 	}
 }
+
+cacheBustedStaticChunks = cacheBustStaticChunks(changedStaticChunks);
 
 let putEvidence = 0;
 let remainingPostUploadEvidence = 0;
@@ -361,6 +437,7 @@ console.log(
 		filesWithMarkers,
 		filesChanged,
 		totalReplacements,
+		cacheBustedStaticChunks,
 		putEvidence,
 		remainingPostUploadEvidence,
 		remainingPostPresignEvidence,
@@ -370,6 +447,7 @@ console.log(
 
 if (
 	putEvidence < 3 ||
+	cacheBustedStaticChunks < 2 ||
 	remainingPostUploadEvidence > 0 ||
 	remainingPostPresignEvidence > 0 ||
 	emailSenderEvidence < 3
