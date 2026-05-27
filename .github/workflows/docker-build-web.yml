@@ -1,6 +1,9 @@
 name: "Docker Build Web"
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       tag:
