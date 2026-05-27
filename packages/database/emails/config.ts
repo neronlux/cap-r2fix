@@ -40,7 +40,7 @@ export const sendEmail = async ({
 		from = "Cap Auth <no-reply@auth.cap.so>";
 	else {
 		const { RESEND_FROM_DOMAIN, RESEND_FROM_EMAIL } = serverEnv();
-		from = RESEND_FROM_EMAIL ?? `auth@${RESEND_FROM_DOMAIN}`;
+		from = RESEND_FROM_EMAIL || `auth@${RESEND_FROM_DOMAIN}`;
 	}
 
 	return r.emails.send({
