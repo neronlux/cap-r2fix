@@ -281,6 +281,15 @@ function patchOfficialCompiledEmailSource(source) {
 	return { output, replacements };
 }
 
+function patchOfficialCompiledOtpSource(source) {
+	const search =
+		'mutationFn:async()=>{let e=x.join("");if(6!==e.length)throw"Please enter a complete 6-digit code";if(!(await fetch("/api/auth/callback/email?email=".concat(encodeURIComponent(j),"&token=").concat(encodeURIComponent(e),"&callbackUrl=").concat(encodeURIComponent("/login-success")))).url.includes("/login-success")){var t;throw m(["","","","","",""]),null==(t=f.current[0])||t.focus(),"Invalid code. Please try again."}}';
+	const replacement =
+		'mutationFn:async()=>{let e=x.join("");if(6!==e.length)throw"Please enter a complete 6-digit code";let t=()=>{var e;m(["","","","","",""]),null==(e=f.current[0])||e.focus()},r=await fetch("/api/auth/callback/email?email=".concat(encodeURIComponent(j),"&token=").concat(encodeURIComponent(e),"&callbackUrl=").concat(encodeURIComponent("/login-success")),{cache:"no-store",credentials:"include"});if(r.url.includes("error=Verification"))throw t(),"Invalid code. Please try again.";for(let e=0;e<8;e++){let r=await fetch("/api/auth/session",{cache:"no-store",credentials:"include"});if(r.ok){let e=await r.json();if(null==e?void 0:e.user)return}await new Promise(e=>setTimeout(e,250))}throw t(),"Invalid code. Please try again."}';
+
+	return replaceAll(source, search, replacement);
+}
+
 function isStaticChunk(path) {
 	return (
 		path.includes("/apps/web/.next/static/chunks/") && path.endsWith(".js")
@@ -356,11 +365,13 @@ for (const file of walk(root)) {
 	const namedPatch = patchSource(source);
 	const compiledPatch = patchOfficialCompiledSource(namedPatch.output);
 	const emailPatch = patchOfficialCompiledEmailSource(compiledPatch.output);
-	const output = emailPatch.output;
+	const otpPatch = patchOfficialCompiledOtpSource(emailPatch.output);
+	const output = otpPatch.output;
 	const replacements =
 		namedPatch.replacements +
 		compiledPatch.replacements +
-		emailPatch.replacements;
+		emailPatch.replacements +
+		otpPatch.replacements;
 	if (replacements > 0) {
 		if (!dryRun) writeFileSync(file, output);
 		if (isStaticChunk(file)) changedStaticChunks.push(file);
@@ -381,8 +392,12 @@ for (const file of walk(root)) {
 
 	const compiledPatch = patchOfficialCompiledSource(source);
 	const emailPatch = patchOfficialCompiledEmailSource(compiledPatch.output);
-	const output = emailPatch.output;
-	const replacements = compiledPatch.replacements + emailPatch.replacements;
+	const otpPatch = patchOfficialCompiledOtpSource(emailPatch.output);
+	const output = otpPatch.output;
+	const replacements =
+		compiledPatch.replacements +
+		emailPatch.replacements +
+		otpPatch.replacements;
 	if (replacements > 0) {
 		if (!dryRun) writeFileSync(file, output);
 		if (isStaticChunk(file)) changedStaticChunks.push(file);
@@ -400,6 +415,7 @@ let putEvidence = 0;
 let remainingPostUploadEvidence = 0;
 let remainingPostPresignEvidence = 0;
 let emailSenderEvidence = 0;
+let otpSessionRetryEvidence = 0;
 for (const file of walk(root)) {
 	const { size } = statSync(file);
 	if (size > 20 * 1024 * 1024) continue;
@@ -428,6 +444,10 @@ for (const file of walk(root)) {
 
 	emailSenderEvidence +=
 		source.match(/process\.env\.RESEND_FROM_EMAIL/g)?.length ?? 0;
+	otpSessionRetryEvidence +=
+		source.match(
+			/\/api\/auth\/session",\{cache:"no-store",credentials:"include"\}/g,
+		)?.length ?? 0;
 }
 
 console.log(
@@ -442,6 +462,7 @@ console.log(
 		remainingPostUploadEvidence,
 		remainingPostPresignEvidence,
 		emailSenderEvidence,
+		otpSessionRetryEvidence,
 	}),
 );
 
@@ -450,7 +471,8 @@ if (
 	cacheBustedStaticChunks < 2 ||
 	remainingPostUploadEvidence > 0 ||
 	remainingPostPresignEvidence > 0 ||
-	emailSenderEvidence < 3
+	emailSenderEvidence < 3 ||
+	otpSessionRetryEvidence < 1
 ) {
 	const clues = [];
 	for (const file of walk(root)) {

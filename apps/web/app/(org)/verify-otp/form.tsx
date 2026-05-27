@@ -71,21 +71,49 @@ export function VerifyOTPForm({
 	};
 
 	const normalizedEmail = email.toLowerCase();
+	const resetCodeInput = () => {
+		setCode(["", "", "", "", "", ""]);
+		inputRefs.current[0]?.focus();
+	};
+	const waitForSessionUser = async () => {
+		for (let attempt = 0; attempt < 8; attempt++) {
+			const sessionRes = await fetch("/api/auth/session", {
+				cache: "no-store",
+				credentials: "include",
+			});
+
+			if (sessionRes.ok) {
+				const session = await sessionRes.json();
+				if (session?.user) return session.user;
+			}
+
+			await new Promise((resolve) => setTimeout(resolve, 250));
+		}
+
+		return null;
+	};
 
 	const handleVerify = useMutation({
 		mutationFn: async (pastedCode?: string) => {
 			const otpCode = pastedCode ?? code.join("");
 			if (otpCode.length !== 6) throw "Please enter a complete 6-digit code";
 
-			await fetch(
+			const callbackRes = await fetch(
 				`/api/auth/callback/email?email=${encodeURIComponent(normalizedEmail)}&token=${encodeURIComponent(otpCode)}&callbackUrl=${encodeURIComponent(next || "/dashboard")}`,
+				{
+					cache: "no-store",
+					credentials: "include",
+				},
 			);
 
-			const sessionRes = await fetch("/api/auth/session");
-			const session = await sessionRes.json();
-			if (!session?.user) {
-				setCode(["", "", "", "", "", ""]);
-				inputRefs.current[0]?.focus();
+			if (callbackRes.url.includes("error=Verification")) {
+				resetCodeInput();
+				throw "Invalid code. Please try again.";
+			}
+
+			const user = await waitForSessionUser();
+			if (!user) {
+				resetCodeInput();
 				throw "Invalid code. Please try again.";
 			}
 		},
