@@ -151,6 +151,99 @@ function patchSource(source) {
 	return { output, replacements: insertions.length };
 }
 
+function replaceAll(source, search, replacement) {
+	const count = source.split(search).length - 1;
+	if (count === 0) return { output: source, replacements: 0 };
+	return {
+		output: source.split(search).join(replacement),
+		replacements: count,
+	};
+}
+
+function patchOfficialCompiledSource(source) {
+	let output = source;
+	let replacements = 0;
+
+	const apply = (search, replacement) => {
+		const result = replaceAll(output, search, replacement);
+		output = result.output;
+		replacements += result.replacements;
+		return result.replacements;
+	};
+
+	const applyPair = (
+		openSearch,
+		openReplacement,
+		sendSearch,
+		sendReplacement,
+	) => {
+		const openReplacements = apply(openSearch, openReplacement);
+		if (openReplacements > 0) apply(sendSearch, sendReplacement);
+	};
+
+	output = output.replace(
+		/yield\*([A-Za-z_$][\w$]*)\.getPresignedPostUrl\(([^,()]+),\{Fields:\{"Content-Type":([^,{}]+),[^{}]*\},Expires:(\d+)\}\)/g,
+		(_match, bucket, key, contentType, expires) => {
+			replacements += 1;
+			return `({url:yield*${bucket}.getPresignedPutUrl(${key},{ContentType:${contentType}},{expiresIn:${expires}}),fields:{}})`;
+		},
+	);
+
+	output = output.replace(
+		/yield\*([A-Za-z_$][\w$]*)\.getPresignedPostUrl\(([^,()]+),\{Fields:([A-Za-z_$][\w$]*),Expires:(\d+)\}\)/g,
+		(_match, bucket, key, fields, expires) => {
+			replacements += 1;
+			return `({url:yield*${bucket}.getPresignedPutUrl(${key},{ContentType:${fields}["Content-Type"]},{expiresIn:${expires}}),fields:{}})`;
+		},
+	);
+
+	apply('.default("post"),durationInSecs:', '.default("put"),durationInSecs:');
+
+	applyPair(
+		'c.open("POST",h.presignedPostData.url)',
+		'c.open("PUT",h.presignedPostData.url),c.setRequestHeader("Content-Type","video/mp4")',
+		"c.send(j)",
+		"c.send(a)",
+	);
+
+	applyPair(
+		'r.open("POST",l.presignedPostData.url)',
+		'r.open("PUT",l.presignedPostData.url),r.setRequestHeader("Content-Type","video/mp4")',
+		"r.send(d)",
+		"r.send(e)",
+	);
+
+	applyPair(
+		'j.open("POST",b.url)',
+		'j.open("PUT",b.url),j.setRequestHeader("Content-Type","video/mp4")',
+		"j.send(i)",
+		"j.send(h)",
+	);
+
+	applyPair(
+		'e.open("POST",a.presignedPostData.url)',
+		'e.open("PUT",a.presignedPostData.url),e.setRequestHeader("Content-Type","image/jpeg")',
+		"e.send(b)",
+		"e.send(f)",
+	);
+
+	applyPair(
+		'n.open("POST",e.presignedPostData.url)',
+		'n.open("PUT",e.presignedPostData.url),n.setRequestHeader("Content-Type","image/jpeg")',
+		"n.send(t)",
+		"n.send(l)",
+	);
+
+	applyPair(
+		'd.open("POST",t.url)',
+		'd.open("PUT",t.url),d.setRequestHeader("Content-Type","video/mp4")',
+		"d.send(o)",
+		"d.send(l)",
+	);
+
+	return { output, replacements };
+}
+
 let filesScanned = 0;
 let filesWithMarkers = 0;
 let filesChanged = 0;
@@ -165,7 +258,10 @@ for (const file of walk(root)) {
 	if (!markerPattern.test(source)) continue;
 
 	filesWithMarkers += 1;
-	const { output, replacements } = patchSource(source);
+	const namedPatch = patchSource(source);
+	const compiledPatch = patchOfficialCompiledSource(namedPatch.output);
+	const output = compiledPatch.output;
+	const replacements = namedPatch.replacements + compiledPatch.replacements;
 	if (replacements > 0) {
 		if (!dryRun) writeFileSync(file, output);
 		filesChanged += 1;
@@ -176,19 +272,52 @@ for (const file of walk(root)) {
 	}
 }
 
-let putEvidence = 0;
 for (const file of walk(root)) {
 	const { size } = statSync(file);
 	if (size > 20 * 1024 * 1024) continue;
 
 	const source = readFileSync(file, "utf8");
-	if (!markerPattern.test(source)) continue;
+	if (markerPattern.test(source)) continue;
 
-	const matches =
-		source.match(
-			/(createUploadTargetFor(?:User|Video)|\.createUploadTarget\()[\s\S]{0,700}?method\s*:\s*["']put["']/g,
-		) ?? [];
-	putEvidence += matches.length;
+	const { output, replacements } = patchOfficialCompiledSource(source);
+	if (replacements > 0) {
+		if (!dryRun) writeFileSync(file, output);
+		filesChanged += 1;
+		totalReplacements += replacements;
+		console.log(
+			`${dryRun ? "would patch" : "patched"} ${replacements} compiled upload call(s): ${file.replace(root, "")}`,
+		);
+	}
+}
+
+let putEvidence = 0;
+let remainingPostUploadEvidence = 0;
+let remainingPostPresignEvidence = 0;
+for (const file of walk(root)) {
+	const { size } = statSync(file);
+	if (size > 20 * 1024 * 1024) continue;
+
+	const source = readFileSync(file, "utf8");
+
+	const namedMatches = markerPattern.test(source)
+		? (source.match(
+				/(createUploadTargetFor(?:User|Video)|\.createUploadTarget\()[\s\S]{0,700}?method\s*:\s*["']put["']/g,
+			) ?? [])
+		: [];
+	const compiledMatches =
+		source.match(/getPresignedPutUrl\([^)]*\{ContentType:/g) ?? [];
+	putEvidence += namedMatches.length + compiledMatches.length;
+
+	const riskyPostUploads =
+		source.match(/open\("POST",[^)]*(?:presignedPostData\.url|\.url)\)/g) ?? [];
+	remainingPostUploadEvidence += riskyPostUploads.length;
+
+	if (
+		/getPresignedPostUrl\([^)]*\{Fields:(?:\{|[A-Za-z_$])/.test(source) &&
+		/x-amz-meta-userid/.test(source)
+	) {
+		remainingPostPresignEvidence += 1;
+	}
 }
 
 console.log(
@@ -199,10 +328,16 @@ console.log(
 		filesChanged,
 		totalReplacements,
 		putEvidence,
+		remainingPostUploadEvidence,
+		remainingPostPresignEvidence,
 	}),
 );
 
-if (putEvidence < 3) {
+if (
+	putEvidence < 3 ||
+	remainingPostUploadEvidence > 0 ||
+	remainingPostPresignEvidence > 0
+) {
 	const clues = [];
 	for (const file of walk(root)) {
 		const { size } = statSync(file);
