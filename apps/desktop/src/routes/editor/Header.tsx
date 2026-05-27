@@ -1,0 +1,724 @@
+import { Button } from "@cap/ui-solid";
+import { Dialog as KDialog } from "@kobalte/core/dialog";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { LogicalPosition } from "@tauri-apps/api/dpi";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { Menu, MenuItem } from "@tauri-apps/api/menu";
+import { ask, open } from "@tauri-apps/plugin-dialog";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { type as ostype } from "@tauri-apps/plugin-os";
+import { cx } from "cva";
+import {
+	type ComponentProps,
+	createEffect,
+	createMemo,
+	createResource,
+	createSignal,
+	For,
+	onCleanup,
+	onMount,
+	Show,
+} from "solid-js";
+import { produce } from "solid-js/store";
+import toast from "solid-toast";
+import Tooltip from "~/components/Tooltip";
+import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
+import { trackEvent } from "~/utils/analytics";
+import { commands, type RecordingMetaWithMetadata } from "~/utils/tauri";
+import { initializeTitlebar } from "~/utils/titlebar-state";
+import IconLucideImport from "~icons/lucide/import";
+import {
+	applyCaptionResultToProject,
+	getSelectedTranscriptionSettings,
+	transcribeEditorCaptions,
+} from "./captions";
+import { serializeProjectConfiguration, useEditorContext } from "./context";
+import OrganizationDropdown from "./OrganizationDropdown";
+import PresetsDropdown from "./PresetsDropdown";
+import ShareButton from "./ShareButton";
+import { Dialog, EditorButton, Input } from "./ui";
+
+export type ResolutionOption = {
+	label: string;
+	value: string;
+	width: number;
+	height: number;
+};
+
+export const RESOLUTION_OPTIONS = {
+	_720p: { label: "720p", value: "720p", width: 1280, height: 720 },
+	_1080p: { label: "1080p", value: "1080p", width: 1920, height: 1080 },
+	_4k: { label: "4K", value: "4k", width: 3840, height: 2160 },
+};
+
+export interface ExportEstimates {
+	duration_seconds: number;
+	estimated_time_seconds: number;
+	estimated_size_mb: number;
+}
+
+type ImportableRecording = {
+	path: string;
+	meta: RecordingMetaWithMetadata;
+	thumbnailPath: string;
+};
+
+const normalizeImportPath = (path: string) =>
+	path.replace(/\\/g, "/").replace(/\/+$/, "");
+
+const recordingModeLabel = (mode: RecordingMetaWithMetadata["mode"]) =>
+	mode === "studio" ? "Studio Mode" : "Instant Mode";
+
+export function Header() {
+	const {
+		editorInstance,
+		project,
+		setProject,
+		projectHistory,
+		dialog,
+		setDialog,
+		meta,
+		exportState,
+		setExportState,
+		customDomain,
+		editorState,
+		setEditorState,
+	} = useEditorContext();
+
+	const [importingRecording, setImportingRecording] = createSignal(false);
+	const [importDialogOpen, setImportDialogOpen] = createSignal(false);
+	const [importSearch, setImportSearch] = createSignal("");
+	const [recordings] = createResource(importDialogOpen, async (open) => {
+		if (!open) return [];
+		const result = await commands.listRecordings();
+		return result.map(([path, meta]) => ({
+			path,
+			meta,
+			thumbnailPath: `${path}/screenshots/display.jpg`,
+		}));
+	});
+
+	let unlistenTitlebar: UnlistenFn | undefined;
+	onMount(async () => {
+		unlistenTitlebar = await initializeTitlebar();
+	});
+	onCleanup(() => unlistenTitlebar?.());
+
+	createEffect(() => {
+		if (!importDialogOpen()) setImportSearch("");
+	});
+
+	const clearTimelineSelection = () => {
+		if (!editorState.timeline.selection) return false;
+		setEditorState("timeline", "selection", null);
+		return true;
+	};
+
+	const selectedPath = (result: string | string[] | null) =>
+		typeof result === "string" ? result : null;
+
+	const importRecordingPath = async (sourcePath: string) => {
+		if (importingRecording()) return;
+
+		clearTimelineSelection();
+		setImportingRecording(true);
+		const toastId = toast.loading("Importing recording...");
+
+		try {
+			if (editorState.playing) {
+				await commands.stopPlayback();
+				setEditorState("playing", false);
+			}
+
+			await commands.setProjectConfig(serializeProjectConfiguration(project));
+			const importedCount =
+				await commands.addExistingRecordingToEditor(sourcePath);
+			toast.success(
+				importedCount === 1
+					? "Recording imported"
+					: `${importedCount} recordings imported`,
+				{ id: toastId },
+			);
+			window.location.reload();
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			toast.error(`Failed to import recording: ${message}`, { id: toastId });
+		} finally {
+			setImportingRecording(false);
+		}
+	};
+
+	const pickMp4Recording = async () => {
+		const path = selectedPath(
+			await open({
+				filters: [{ name: "MP4 Video", extensions: ["mp4"] }],
+				multiple: false,
+			}),
+		);
+		if (path) await importRecordingPath(path);
+	};
+
+	const openExistingRecordingImporter = () => {
+		if (importingRecording()) return;
+		clearTimelineSelection();
+		setImportDialogOpen(true);
+	};
+
+	const openImportMenu = async (event: MouseEvent) => {
+		if (importingRecording()) return;
+		clearTimelineSelection();
+
+		const menu = await Menu.new({
+			items: [
+				await MenuItem.new({
+					text: "Existing Cap Recording...",
+					action: openExistingRecordingImporter,
+				}),
+				await MenuItem.new({
+					text: "MP4 Video...",
+					action: () => void pickMp4Recording(),
+				}),
+			],
+		});
+
+		menu.popup(new LogicalPosition(event.clientX, event.clientY));
+	};
+
+	const importableRecordings = createMemo(() => {
+		const currentPath = normalizeImportPath(editorInstance.path);
+		const query = importSearch().trim().toLowerCase();
+
+		return (recordings() ?? []).filter((recording) => {
+			if (normalizeImportPath(recording.path) === currentPath) return false;
+			if (recording.meta.status.status !== "Complete") return false;
+			if (recording.meta.mode !== "instant" && recording.meta.mode !== "studio")
+				return false;
+			if (!query) return true;
+			return recording.meta.pretty_name.toLowerCase().includes(query);
+		});
+	});
+
+	const handleImportRecording = async (recording: ImportableRecording) => {
+		setImportDialogOpen(false);
+		await importRecordingPath(recording.path);
+	};
+
+	const showCaptionsStale = createMemo(
+		() =>
+			(editorState.captions.isStale || editorState.captions.isGenerating) &&
+			!editorState.captions.staleDismissed &&
+			((project.timeline?.captionSegments?.length ?? 0) > 0 ||
+				(project.captions?.segments?.length ?? 0) > 0),
+	);
+
+	const hasTranscript = createMemo(() => {
+		const segments = project.captions?.segments ?? [];
+		return segments.some((seg) => seg.words && seg.words.length > 0);
+	});
+
+	const isTranscriptOpen = createMemo(() => {
+		const d = dialog();
+		return "type" in d && d.type === "transcript" && d.open;
+	});
+
+	const regenerateCaptions = async () => {
+		setEditorState("captions", "isGenerating", true);
+		try {
+			const { model, language } = getSelectedTranscriptionSettings();
+			const result = await transcribeEditorCaptions(
+				editorInstance.path,
+				model,
+				language,
+			);
+			if (result.segments.length < 1) {
+				toast.error(
+					"No captions were generated. The audio might be too quiet or unclear.",
+				);
+				return;
+			}
+
+			setProject(
+				produce((p) => {
+					applyCaptionResultToProject(
+						p,
+						result.segments,
+						editorInstance.recordings.segments,
+						editorInstance.recordingDuration,
+					);
+				}),
+			);
+
+			setEditorState("captions", "isStale", false);
+			toast.success("Captions regenerated!");
+		} catch (error) {
+			console.error("Error regenerating captions:", error);
+			toast.error("Failed to regenerate captions");
+		} finally {
+			setEditorState("captions", "isGenerating", false);
+		}
+	};
+
+	return (
+		<div
+			data-tauri-drag-region
+			class="flex relative flex-row items-center w-full h-14"
+		>
+			<div
+				data-tauri-drag-region
+				class={cx("flex flex-row flex-1 gap-2 items-center px-4 h-full")}
+			>
+				{ostype() === "macos" && <div class="h-full w-16" />}
+				<EditorButton
+					onClick={async () => {
+						clearTimelineSelection();
+
+						if (!(await ask("Are you sure you want to delete this recording?")))
+							return;
+
+						await commands.editorDeleteProject();
+					}}
+					tooltipText="Delete recording"
+					leftIcon={<IconCapTrash class="w-5" />}
+				/>
+				<EditorButton
+					onClick={() => {
+						clearTimelineSelection();
+
+						console.log({ path: `${editorInstance.path}/` });
+						revealItemInDir(`${editorInstance.path}/`);
+					}}
+					tooltipText="Open recording bundle"
+					leftIcon={<IconLucideFolder class="w-5" />}
+				/>
+				<EditorButton
+					onClick={openImportMenu}
+					disabled={importingRecording()}
+					tooltipText="Import recording"
+					leftIcon={<IconLucideImport class="w-5" />}
+				/>
+				<ImportRecordingDialog
+					open={importDialogOpen()}
+					search={importSearch()}
+					recordings={importableRecordings()}
+					isLoading={recordings.loading}
+					isImporting={importingRecording()}
+					onOpenChange={setImportDialogOpen}
+					onSearch={setImportSearch}
+					onImport={handleImportRecording}
+					onImportMp4={pickMp4Recording}
+				/>
+
+				<div class="flex flex-row items-center">
+					<NameEditor name={meta().prettyName} />
+					<span class="text-sm text-gray-11">.cap</span>
+				</div>
+				<div data-tauri-drag-region class="flex-1 h-full" />
+				<EditorButton
+					onClick={() => {
+						if (clearTimelineSelection()) return;
+					}}
+					tooltipText="Captions"
+					leftIcon={<IconCapCaptions class="w-5" />}
+					comingSoon={true}
+				/>
+				<EditorButton
+					onClick={() => {
+						if (clearTimelineSelection()) return;
+					}}
+					tooltipText="Performance"
+					leftIcon={<IconCapGauge class="w-[18px]" />}
+					comingSoon={true}
+				/>
+			</div>
+
+			<div
+				data-tauri-drag-region
+				class="flex flex-row items-center justify-center gap-2 px-4 border-x border-black-transparent-10"
+			>
+				<PresetsDropdown />
+				<OrganizationDropdown />
+			</div>
+
+			<div
+				data-tauri-drag-region
+				class={cx(
+					"flex-1 h-full flex flex-row items-center gap-2 pl-2",
+					ostype() !== "windows" && "pr-2",
+				)}
+			>
+				<EditorButton
+					onClick={() => {
+						clearTimelineSelection();
+						if (!projectHistory.canUndo()) return;
+						projectHistory.undo();
+					}}
+					disabled={
+						!projectHistory.canUndo() && !editorState.timeline.selection
+					}
+					tooltipText="Undo"
+					leftIcon={<IconCapUndo class="w-5" />}
+				/>
+				<EditorButton
+					onClick={() => {
+						clearTimelineSelection();
+						if (!projectHistory.canRedo()) return;
+						projectHistory.redo();
+					}}
+					disabled={
+						!projectHistory.canRedo() && !editorState.timeline.selection
+					}
+					tooltipText="Redo"
+					leftIcon={<IconCapRedo class="w-5" />}
+				/>
+				<div data-tauri-drag-region class="flex-1 h-full" />
+				<Show when={customDomain.data}>
+					<ShareButton />
+				</Show>
+				<Show when={showCaptionsStale()}>
+					<div class="flex items-center h-[32px] rounded-lg bg-gray-3 overflow-hidden">
+						<button
+							class="h-full px-3 text-gray-11 text-xs font-medium transition-colors hover:bg-gray-4 flex items-center gap-1.5 disabled:opacity-70 disabled:cursor-not-allowed"
+							disabled={editorState.captions.isGenerating}
+							onClick={() => void regenerateCaptions()}
+						>
+							<Show
+								when={!editorState.captions.isGenerating}
+								fallback={
+									<svg
+										class="size-3.5 animate-spin"
+										viewBox="0 0 16 16"
+										fill="none"
+									>
+										<circle
+											cx="8"
+											cy="8"
+											r="6.5"
+											stroke="currentColor"
+											stroke-opacity="0.25"
+											stroke-width="2.5"
+										/>
+										<path
+											d="M14.5 8a6.5 6.5 0 00-6.5-6.5"
+											stroke="currentColor"
+											stroke-width="2.5"
+											stroke-linecap="round"
+										/>
+									</svg>
+								}
+							>
+								<IconCapCaptions class="size-3.5" />
+							</Show>
+							{editorState.captions.isGenerating
+								? "Regenerating..."
+								: "Regenerate captions"}
+						</button>
+						<Show when={!editorState.captions.isGenerating}>
+							<div class="w-px h-4 bg-gray-6" />
+							<button
+								class="h-full w-[30px] flex items-center justify-center text-gray-9 hover:text-gray-11 hover:bg-gray-4 transition-colors"
+								onClick={() =>
+									setEditorState("captions", "staleDismissed", true)
+								}
+							>
+								<svg
+									width="8"
+									height="8"
+									viewBox="0 0 10 10"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="1.5"
+									stroke-linecap="round"
+								>
+									<path d="M1 1l8 8M9 1l-8 8" />
+								</svg>
+							</button>
+						</Show>
+					</div>
+				</Show>
+				<Show when={hasTranscript()}>
+					<Button
+						variant={isTranscriptOpen() ? "white" : "gray"}
+						class="flex gap-1.5 justify-center h-[40px]"
+						onClick={() => {
+							clearTimelineSelection();
+							if (isTranscriptOpen()) {
+								setDialog((d) => ({ ...d, open: false }));
+							} else {
+								setDialog({ type: "transcript", open: true });
+							}
+						}}
+					>
+						<Show
+							when={isTranscriptOpen()}
+							fallback={<IconCapCaptions class="size-4" />}
+						>
+							<IconLucideArrowLeft class="size-4" />
+						</Show>
+						{isTranscriptOpen() ? "Back" : "Transcript"}
+					</Button>
+				</Show>
+				<Button
+					variant="blue"
+					class="flex gap-1.5 justify-center h-[40px] w-full max-w-[100px]"
+					onClick={() => {
+						clearTimelineSelection();
+
+						trackEvent("export_button_clicked");
+						if (exportState.type === "done") setExportState({ type: "idle" });
+
+						setDialog({ type: "export", open: true });
+					}}
+				>
+					<UploadIcon class="size-4" />
+					Export
+				</Button>
+				{ostype() === "windows" && <CaptionControlsWindows11 />}
+			</div>
+		</div>
+	);
+}
+
+function ImportRecordingDialog(props: {
+	open: boolean;
+	search: string;
+	recordings: ImportableRecording[];
+	isLoading: boolean;
+	isImporting: boolean;
+	onOpenChange: (open: boolean) => void;
+	onSearch: (value: string) => void;
+	onImport: (recording: ImportableRecording) => void;
+	onImportMp4: () => void;
+}) {
+	return (
+		<Dialog.Root
+			open={props.open}
+			onOpenChange={props.onOpenChange}
+			size="lg"
+			contentClass="w-[34rem]"
+		>
+			<Dialog.Header>
+				<div class="flex flex-col gap-0.5 min-w-0">
+					<KDialog.Title class="text-sm font-medium text-gray-12">
+						Import recording
+					</KDialog.Title>
+					<KDialog.Description class="text-xs text-gray-10">
+						Newest to oldest
+					</KDialog.Description>
+				</div>
+			</Dialog.Header>
+			<Dialog.Content class="gap-3 max-h-[28rem]">
+				<Input
+					type="search"
+					value={props.search}
+					onInput={(event) => props.onSearch(event.currentTarget.value)}
+					onKeyDown={(event) => {
+						if (event.key === "Escape" && props.search) {
+							event.preventDefault();
+							props.onSearch("");
+						}
+					}}
+					placeholder="Search recordings"
+					autoCapitalize="off"
+					autocorrect="off"
+					autocomplete="off"
+					spellcheck={false}
+					aria-label="Search recordings"
+				/>
+				<div class="min-h-[12rem] max-h-[20rem] overflow-y-auto custom-scroll rounded-lg border border-gray-3 bg-gray-2">
+					<Show
+						when={!props.isLoading}
+						fallback={
+							<div class="flex h-48 items-center justify-center text-xs text-gray-10">
+								Loading recordings...
+							</div>
+						}
+					>
+						<Show
+							when={props.recordings.length > 0}
+							fallback={
+								<div class="flex h-48 items-center justify-center text-xs text-gray-10">
+									No importable recordings found
+								</div>
+							}
+						>
+							<ul class="flex flex-col">
+								<For each={props.recordings}>
+									{(recording) => (
+										<ImportRecordingItem
+											recording={recording}
+											disabled={props.isImporting}
+											onClick={() => props.onImport(recording)}
+										/>
+									)}
+								</For>
+							</ul>
+						</Show>
+					</Show>
+				</div>
+			</Dialog.Content>
+			<Dialog.Footer leftFooterContent={<Dialog.CloseButton />}>
+				<Button
+					variant="gray"
+					onClick={() => {
+						props.onOpenChange(false);
+						void props.onImportMp4();
+					}}
+					disabled={props.isImporting}
+				>
+					Import MP4
+				</Button>
+			</Dialog.Footer>
+		</Dialog.Root>
+	);
+}
+
+function ImportRecordingItem(props: {
+	recording: ImportableRecording;
+	disabled: boolean;
+	onClick: () => void;
+}) {
+	const [imageExists, setImageExists] = createSignal(true);
+
+	return (
+		<li class="border-b border-gray-3 last:border-b-0">
+			<button
+				type="button"
+				disabled={props.disabled}
+				onClick={props.onClick}
+				class="flex w-full items-center gap-3 p-3 text-left transition-colors hover:bg-gray-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 disabled:cursor-not-allowed disabled:opacity-60"
+			>
+				<Show
+					when={imageExists()}
+					fallback={
+						<div class="flex size-12 shrink-0 items-center justify-center rounded-md bg-gray-4 text-gray-10">
+							<IconLucideImport class="size-4" />
+						</div>
+					}
+				>
+					<img
+						class="size-12 shrink-0 rounded-md object-cover"
+						alt="Recording thumbnail"
+						src={convertFileSrc(props.recording.thumbnailPath)}
+						onError={() => setImageExists(false)}
+					/>
+				</Show>
+				<div class="min-w-0 flex-1">
+					<div class="truncate text-sm font-medium text-gray-12">
+						{props.recording.meta.pretty_name}
+					</div>
+					<div class="mt-1 flex items-center gap-1.5">
+						<div
+							class={cx(
+								"flex w-fit items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium text-gray-12",
+								props.recording.meta.mode === "instant"
+									? "bg-blue-100"
+									: "bg-gray-4",
+							)}
+						>
+							{props.recording.meta.mode === "instant" ? (
+								<IconCapInstant class="size-2.5 invert dark:invert-0" />
+							) : (
+								<IconCapFilmCut class="size-2.5 invert dark:invert-0" />
+							)}
+							<span>{recordingModeLabel(props.recording.meta.mode)}</span>
+						</div>
+					</div>
+				</div>
+			</button>
+		</li>
+	);
+}
+
+const UploadIcon = (props: ComponentProps<"svg">) => {
+	const { exportState } = useEditorContext();
+	return (
+		<svg
+			width={20}
+			height={20}
+			viewBox="0 0 20 20"
+			fill="none"
+			xmlns="http://www.w3.org/2000/svg"
+			{...props}
+		>
+			{/* Bottom part (the base) */}
+			<path
+				d="M16.6667 10.625V14.1667C16.6667 15.5474 15.5474 16.6667 14.1667 16.6667H5.83333C4.45262 16.6667 3.33333 15.5474 3.33333 14.1667V10.625"
+				stroke="currentColor"
+				stroke-width={1.66667}
+				stroke-linecap="round"
+				stroke-linejoin="round"
+				class="upload-base"
+			/>
+
+			{/* Arrow part */}
+			<path
+				d="M9.99999 3.33333V12.7083M9.99999 3.33333L13.75 7.08333M9.99999 3.33333L6.24999 7.08333"
+				stroke="currentColor"
+				stroke-width={1.66667}
+				stroke-linecap="round"
+				stroke-linejoin="round"
+				class={cx(
+					exportState.type !== "idle" &&
+						exportState.type !== "done" &&
+						"bounce",
+				)}
+			/>
+		</svg>
+	);
+};
+
+function NameEditor(props: { name: string }) {
+	const { refetchMeta } = useEditorContext();
+
+	let prettyNameRef: HTMLInputElement | undefined;
+	let prettyNameMeasureRef: HTMLSpanElement | undefined;
+	const [truncated, setTruncated] = createSignal(false);
+	const [prettyName, setPrettyName] = createSignal(props.name);
+
+	createEffect(() => {
+		if (!prettyNameRef || !prettyNameMeasureRef) return;
+		prettyNameMeasureRef.textContent = prettyName();
+		const inputWidth = prettyNameRef.offsetWidth;
+		const textWidth = prettyNameMeasureRef.offsetWidth;
+		setTruncated(inputWidth < textWidth);
+	});
+
+	return (
+		<Tooltip disabled={!truncated()} content={props.name}>
+			<div class="flex relative flex-row items-center text-sm font-normal font-inherit tracking-inherit text-gray-12">
+				<input
+					ref={prettyNameRef}
+					class={cx(
+						"absolute inset-0 px-px m-0 opacity-0 overflow-hidden focus:opacity-100 bg-transparent border-b border-transparent focus:border-gray-7 focus:outline-hidden peer whitespace-pre",
+						truncated() && "truncate",
+						(prettyName().length < 5 || prettyName().length > 100) &&
+							"focus:border-red-500",
+					)}
+					value={prettyName()}
+					onInput={(e) => setPrettyName(e.currentTarget.value)}
+					onBlur={async () => {
+						const trimmed = prettyName().trim();
+						if (trimmed.length < 5 || trimmed.length > 100) {
+							setPrettyName(props.name);
+							return;
+						}
+						if (trimmed && trimmed !== props.name) {
+							await commands.setPrettyName(trimmed);
+							refetchMeta();
+						}
+					}}
+					onKeyDown={(e) => {
+						if (e.key === "Enter" || e.key === "Escape") {
+							prettyNameRef?.blur();
+						}
+					}}
+				/>
+				{/* Hidden span for measuring text width */}
+				<span
+					ref={prettyNameMeasureRef}
+					class="pointer-events-none max-w-[200px] px-px m-0 peer-focus:opacity-0 border-b border-transparent truncate whitespace-pre"
+				/>
+			</div>
+		</Tooltip>
+	);
+}
