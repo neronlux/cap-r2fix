@@ -244,6 +244,29 @@ function patchOfficialCompiledSource(source) {
 	return { output, replacements };
 }
 
+function patchOfficialCompiledEmailSource(source) {
+	let output = source;
+	let replacements = 0;
+	const resendDomainExpression = "$" + "{(0,d.NK)().RESEND_FROM_DOMAIN}";
+	const defaultSenderSource =
+		'l=k||(f?"Richie from Cap <richie@send.cap.so>":d.WB.NEXT_PUBLIC_IS_CAP?"Cap Auth <no-reply@auth.cap.so>":`auth@' +
+		resendDomainExpression +
+		"`)";
+
+	const result = replaceAll(
+		output,
+		defaultSenderSource,
+		defaultSenderSource.replace(
+			"l=k||",
+			"l=k||process.env.RESEND_FROM_EMAIL||",
+		),
+	);
+	output = result.output;
+	replacements += result.replacements;
+
+	return { output, replacements };
+}
+
 let filesScanned = 0;
 let filesWithMarkers = 0;
 let filesChanged = 0;
@@ -260,14 +283,18 @@ for (const file of walk(root)) {
 	filesWithMarkers += 1;
 	const namedPatch = patchSource(source);
 	const compiledPatch = patchOfficialCompiledSource(namedPatch.output);
-	const output = compiledPatch.output;
-	const replacements = namedPatch.replacements + compiledPatch.replacements;
+	const emailPatch = patchOfficialCompiledEmailSource(compiledPatch.output);
+	const output = emailPatch.output;
+	const replacements =
+		namedPatch.replacements +
+		compiledPatch.replacements +
+		emailPatch.replacements;
 	if (replacements > 0) {
 		if (!dryRun) writeFileSync(file, output);
 		filesChanged += 1;
 		totalReplacements += replacements;
 		console.log(
-			`${dryRun ? "would patch" : "patched"} ${replacements} upload target call(s): ${file.replace(root, "")}`,
+			`${dryRun ? "would patch" : "patched"} ${replacements} compiled call(s): ${file.replace(root, "")}`,
 		);
 	}
 }
@@ -279,13 +306,16 @@ for (const file of walk(root)) {
 	const source = readFileSync(file, "utf8");
 	if (markerPattern.test(source)) continue;
 
-	const { output, replacements } = patchOfficialCompiledSource(source);
+	const compiledPatch = patchOfficialCompiledSource(source);
+	const emailPatch = patchOfficialCompiledEmailSource(compiledPatch.output);
+	const output = emailPatch.output;
+	const replacements = compiledPatch.replacements + emailPatch.replacements;
 	if (replacements > 0) {
 		if (!dryRun) writeFileSync(file, output);
 		filesChanged += 1;
 		totalReplacements += replacements;
 		console.log(
-			`${dryRun ? "would patch" : "patched"} ${replacements} compiled upload call(s): ${file.replace(root, "")}`,
+			`${dryRun ? "would patch" : "patched"} ${replacements} compiled call(s): ${file.replace(root, "")}`,
 		);
 	}
 }
@@ -293,6 +323,7 @@ for (const file of walk(root)) {
 let putEvidence = 0;
 let remainingPostUploadEvidence = 0;
 let remainingPostPresignEvidence = 0;
+let emailSenderEvidence = 0;
 for (const file of walk(root)) {
 	const { size } = statSync(file);
 	if (size > 20 * 1024 * 1024) continue;
@@ -318,6 +349,9 @@ for (const file of walk(root)) {
 	) {
 		remainingPostPresignEvidence += 1;
 	}
+
+	emailSenderEvidence +=
+		source.match(/process\.env\.RESEND_FROM_EMAIL/g)?.length ?? 0;
 }
 
 console.log(
@@ -330,13 +364,15 @@ console.log(
 		putEvidence,
 		remainingPostUploadEvidence,
 		remainingPostPresignEvidence,
+		emailSenderEvidence,
 	}),
 );
 
 if (
 	putEvidence < 3 ||
 	remainingPostUploadEvidence > 0 ||
-	remainingPostPresignEvidence > 0
+	remainingPostPresignEvidence > 0 ||
+	emailSenderEvidence < 3
 ) {
 	const clues = [];
 	for (const file of walk(root)) {
