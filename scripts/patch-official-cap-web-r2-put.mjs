@@ -9,6 +9,8 @@ const markerPattern =
 const callPattern =
 	/createUploadTargetFor(?:User|Video)\(|\.createUploadTarget\(/g;
 const dryRun = process.env.CAP_R2_PATCH_DRY_RUN === "1";
+const cluePattern =
+	/x-amz-meta-userid|presignedPostData|s3Post|getPresignedPostUrl|raw-upload\.mp4|Presigned URL created successfully/;
 
 function hasTargetExtension(path) {
 	for (const extension of targetExtensions) {
@@ -201,6 +203,25 @@ console.log(
 );
 
 if (putEvidence < 3) {
+	const clues = [];
+	for (const file of walk(root)) {
+		const { size } = statSync(file);
+		if (size > 20 * 1024 * 1024) continue;
+
+		const source = readFileSync(file, "utf8");
+		const match = cluePattern.exec(source);
+		if (!match) continue;
+
+		const start = Math.max(0, match.index - 220);
+		const end = Math.min(source.length, match.index + 420);
+		clues.push({
+			file: file.replace(root, ""),
+			match: match[0],
+			snippet: source.slice(start, end).replace(/\s+/g, " "),
+		});
+		if (clues.length >= 20) break;
+	}
+	console.log(JSON.stringify({ clueCount: clues.length, clues }, null, 2));
 	throw new Error(
 		"Could not verify enough PUT upload target call sites in the Cap web image",
 	);
