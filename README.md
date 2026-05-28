@@ -110,6 +110,11 @@ S3_PUBLIC_URL=https://s3.yourdomain.com
 
 See the [self-hosting guide](https://cap.so/docs/self-hosting) for email setup, AI providers, SSL, storage, production hardening, and troubleshooting.
 
+This fork also includes stock-image patches for Coolify/self-hosted R2 uploads
+and media processing. See
+[infra/self-hosted-r2-workflow-fixes.md](infra/self-hosted-r2-workflow-fixes.md)
+before rebuilding or troubleshooting the patched image.
+
 ## Local Development
 
 Cap is a Turborepo monorepo with Rust, TypeScript, Tauri, SolidStart, Next.js, Drizzle, MySQL, Tailwind CSS, and shared media crates.
