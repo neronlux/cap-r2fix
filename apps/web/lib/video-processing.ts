@@ -1,13 +1,9 @@
 import { db } from "@cap/database";
 import { videoUploads } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
 import type { S3Bucket, Video } from "@cap/web-domain";
 import { and, eq, ne } from "drizzle-orm";
 import { start } from "workflow/api";
-import {
-	processVideoWorkflow,
-	startVideoProcessingOnMediaServer,
-} from "@/workflows/process-video";
+import { processVideoWorkflow } from "@/workflows/process-video";
 
 export type VideoProcessingStartStatus = "started" | "already-processing";
 
@@ -123,18 +119,14 @@ export async function startVideoProcessingWorkflow({
 	}
 
 	try {
-		const payload = {
-			videoId,
-			userId,
-			rawFileKey,
-			bucketId: bucketId as S3Bucket.S3BucketId | null,
-		};
-
-		if (shouldStartMediaServerDirectly()) {
-			await startVideoProcessingOnMediaServer(payload);
-		} else {
-			await start(processVideoWorkflow, [payload]);
-		}
+		await start(processVideoWorkflow, [
+			{
+				videoId,
+				userId,
+				rawFileKey,
+				bucketId: bucketId as S3Bucket.S3BucketId | null,
+			},
+		]);
 		return "started";
 	} catch (error) {
 		const normalizedError =
@@ -148,11 +140,4 @@ export async function startVideoProcessingWorkflow({
 		);
 		throw normalizedError;
 	}
-}
-
-function shouldStartMediaServerDirectly(): boolean {
-	const env = serverEnv();
-	return Boolean(
-		env.MEDIA_SERVER_URL && !env.WORKFLOWS_RPC_URL && !process.env.VERCEL,
-	);
 }
