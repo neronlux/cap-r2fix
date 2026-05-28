@@ -187,12 +187,13 @@ export async function POST(request: NextRequest) {
 					})
 					.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
 			} else {
-				if (currentVideo && currentUpload?.rawFileKey) {
+				const rawFileKey = currentUpload?.rawFileKey;
+				if (currentVideo && rawFileKey) {
 					Effect.gen(function* () {
 						const [bucket] = yield* Storage.getAccessForVideo(
 							decodeStorageVideo(currentVideo),
 						);
-						yield* bucket.deleteObject(currentUpload.rawFileKey);
+						yield* bucket.deleteObject(rawFileKey);
 					})
 						.pipe(runPromise)
 						.catch((err) => {
