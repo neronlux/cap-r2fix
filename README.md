@@ -12,19 +12,22 @@
 	<a href="https://github.com/CapSoftware/Cap">Upstream</a>
 	 |
 	<a href="https://cap.so/docs">Docs</a>
-	 |
-	<a href="https://cap.so/pricing">Pricing</a>
 </p>
 
 ---
 
-This is a personal fork of [Cap](https://github.com/CapSoftware/Cap) maintained by [@neronlux](https://github.com/neronlux). It is **not** affiliated with Cap Software.
-
-The upstream Cap project is the open source alternative to Loom — beautiful, shareable screen recordings built for teams that want to own their data.
+> **This is a personal fork** maintained by [@neronlux](https://github.com/neronlux)
+> for self-hosting Cap on personal infrastructure. It is **not** affiliated with
+> or endorsed by [Cap Software, Inc.](https://github.com/CapSoftware/Cap) All
+> upstream Cap features, code, and licensing remain unchanged. If you are looking
+> for the official Cap project, go to **[github.com/CapSoftware/Cap](https://github.com/CapSoftware/Cap)**.
 
 ## What This Fork Adds
 
-This fork carries compatibility patches that make the **stock upstream Cap web image** work correctly when self-hosted on [Coolify](https://coolify.io/) with [Cloudflare R2](https://developers.cloudflare.com/r2/) as the S3-compatible object store.
+This fork carries compatibility patches that make the **stock upstream Cap web
+image** work when self-hosted on [Coolify](https://coolify.io/docs/services/cap)
+with [Cloudflare R2](https://developers.cloudflare.com/r2/) as the S3-compatible
+object store.
 
 ### Problems Solved
 
@@ -42,9 +45,14 @@ This fork carries compatibility patches that make the **stock upstream Cap web i
 
 Two deployment strategies are supported:
 
-1. **Patched stock image (recommended)** — `infra/cap-web-stock-r2fix.Dockerfile` takes the official `ghcr.io/capsoftware/cap-web:latest` image and applies `scripts/patch-official-cap-web-r2-put.mjs` at build time. This patches the compiled JavaScript in-place without requiring a full source build.
+1. **Patched stock image (recommended)** — `infra/cap-web-stock-r2fix.Dockerfile`
+   takes the official upstream image and applies
+   `scripts/patch-official-cap-web-r2-put.mjs` at build time. This patches the
+   compiled JavaScript in-place without requiring a full source build.
 
-2. **Source build** — The source-level fixes in `apps/web/proxy.ts`, `apps/web/app/(org)/verify-otp/form.tsx`, and the email/env packages are applied directly when building from source.
+2. **Source build** — The source-level fixes in `apps/web/proxy.ts`,
+   `apps/web/app/(org)/verify-otp/form.tsx`, and the email/env packages are
+   applied directly when building from source.
 
 ### Key Files
 
@@ -60,14 +68,17 @@ Two deployment strategies are supported:
 
 ### Prerequisites
 
-- A [Coolify](https://coolify.io/) instance
+- A [Coolify](https://coolify.io/docs/services/cap) instance
 - A Cloudflare R2 bucket (or other S3-compatible store)
 - A Resend API key (optional, for email login)
 
 ### Deploy
 
-1. Push the `cap-web-stock-r2fix` image to your GHCR registry via the `Docker Build Stock R2 Fix` workflow, or pull `ghcr.io/neronlux/cap-web-stock-r2fix:latest`.
-2. In Coolify, use `docker-compose.coolify.yml` as the compose source (swap MinIO for your R2 endpoint).
+1. Push the `cap-web-stock-r2fix` image to your GHCR registry via the
+   `Docker Build Stock R2 Fix` workflow, or pull
+   `ghcr.io/neronlux/cap-web-stock-r2fix:latest`.
+2. In Coolify, use `docker-compose.coolify.yml` as the compose source (swap
+   MinIO for your R2 endpoint).
 3. Configure environment variables:
 
 ```bash
@@ -113,45 +124,28 @@ All three should report `true`.
 
 ### Diagnostics
 
-See [infra/self-hosted-r2-workflow-fixes.md](infra/self-hosted-r2-workflow-fixes.md) for:
-- Diagnosing stuck processing rows
-- Recovering stale uploads
-- Build and deploy checklist
+See [infra/self-hosted-r2-workflow-fixes.md](infra/self-hosted-r2-workflow-fixes.md)
+for stuck-row recovery, stuck processing diagnosis, and the full build/deploy
+checklist.
 
-## Upstream Documentation
+## Upstream Cap
 
-The sections below are from the upstream Cap project. They apply to this fork unless noted otherwise.
+Cap is the open source alternative to Loom — beautiful, shareable screen
+recordings built for teams that want to own their data.
 
-<details>
-<summary><strong>Recording Modes, Data Ownership, Get Started</strong></summary>
-
-### Recording Modes
-
-| Mode | Best for | How it works |
-| --- | --- | --- |
-| Instant Mode | Fast feedback, bug reports, async updates | Cap uploads while you record, then gives you a share link as soon as recording stops. |
-| Studio Mode | Product demos, tutorials, launches, client work | Cap records locally, opens the editor, and lets you export or share a polished video. |
-
-### Data Ownership
-
-- Connect Cloudflare R2, AWS S3, Backblaze B2, MinIO, Wasabi, or another S3-compatible provider.
-- Serve share pages from your own domain.
-- Self-host Cap Web, the API, database, media server, and object storage with Docker Compose.
-- Point Cap Desktop at your self-hosted instance from `Settings > Cap Server URL`.
-
-### Get Started (hosted)
-
-1. Download Cap for macOS or Windows from [cap.so/download](https://cap.so/download).
-2. Sign in or create an account.
-3. Choose Instant Mode or Studio Mode.
-4. Record your first Cap.
-5. Share the link, export the file, or keep it local.
-
-</details>
+- **Record, edit, share.** Screen, camera, and microphone capture with instant
+  share links or polished exports.
+- **Instant Mode.** Upload while recording, share link on stop.
+- **Studio Mode.** Local editing with backgrounds, zooms, trimming, captions.
+- **Desktop apps.** macOS and Windows with a web dashboard for management.
+- **Own your storage.** S3, R2, MinIO, Backblaze B2, Wasabi, or local.
+- **Self-host.** Full platform with Docker Compose.
+- **Docs.** [cap.so/docs](https://cap.so/docs)
 
 ## Local Development
 
-Cap is a Turborepo monorepo with Rust, TypeScript, Tauri, SolidStart, Next.js, Drizzle, MySQL, Tailwind CSS, and shared media crates.
+Cap is a Turborepo monorepo with Rust, TypeScript, Tauri, SolidStart, Next.js,
+Drizzle, MySQL, Tailwind CSS, and shared media crates.
 
 Requirements:
 
@@ -160,15 +154,11 @@ Requirements:
 - Rust 1.88 or newer
 - Docker for MySQL, MinIO, and local services
 
-Install and set up the repo:
-
 ```bash
 pnpm install
 pnpm env-setup
 pnpm cap-setup
 ```
-
-Common commands:
 
 | Command | Purpose |
 | --- | --- |
@@ -176,51 +166,22 @@ Common commands:
 | `pnpm dev:web` | Start the web app without the desktop app |
 | `pnpm dev:desktop` | Start the desktop app |
 | `pnpm build` | Build the workspace |
-| `pnpm tauri:build` | Build the desktop release |
 | `pnpm lint` | Run Biome linting |
-| `pnpm format` | Format with Biome |
 | `pnpm typecheck` | Run TypeScript project references |
-| `cargo test -p <crate>` | Run Rust tests for a crate |
-
-Database commands:
-
-| Command | Purpose |
-| --- | --- |
 | `pnpm db:generate` | Generate database artifacts |
 | `pnpm db:push` | Push schema changes |
-| `pnpm db:studio` | Open Drizzle Studio |
-
-## Repository Map
-
-| Path | What lives there |
-| --- | --- |
-| `apps/desktop` | Tauri v2 desktop app with SolidStart UI and Rust backend |
-| `apps/web` | Next.js web app for marketing, docs, dashboard, sharing, API routes, and auth |
-| `apps/cli` | Rust CLI |
-| `apps/media-server` | Media processing service used by the web app |
-| `apps/discord-bot` | Discord integration |
-| `packages/database` | Drizzle schema and database access |
-| `packages/ui` | Shared React UI |
-| `packages/ui-solid` | Shared Solid UI |
-| `packages/web-backend` | Backend service layer |
-| `packages/web-domain` | Web domain models and types |
-| `packages/env` | Environment validation |
-| `packages/sdk-embed` | Embed SDK |
-| `packages/sdk-recorder` | Recorder SDK |
-| `crates/*` | Recording, capture, camera, audio, encoding, rendering, muxing, export, and test crates |
-| `scripts/*` | Setup, analytics, build, and maintenance tooling |
-| `infra/*` | Infrastructure configuration |
-
-The web API uses Effect and `@effect/platform` HTTP APIs. Desktop capture and export paths are backed by Rust crates for fast recording, rendering, and platform-specific media access.
-
-## Contributing
-
-This is a personal-use fork. For contributing to Cap itself, see the [upstream repo](https://github.com/CapSoftware/Cap) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-Portions of this software are licensed as follows:
+This fork inherits the same license as the upstream Cap project. All original
+license terms apply without modification.
 
-- Code in the `cap-camera*` and `scap-*` crate families is licensed under the MIT License. See [licenses/LICENSE-MIT](https://github.com/CapSoftware/Cap/blob/main/licenses/LICENSE-MIT).
-- Third-party components are licensed under the original license provided by their owner.
-- All other content not mentioned above is available under the AGPLv3 license as defined in [LICENSE](https://github.com/CapSoftware/Cap/blob/main/LICENSE).
+- **AGPLv3** — All code not mentioned below. See [LICENSE](https://github.com/CapSoftware/Cap/blob/main/LICENSE).
+- **MIT** — Code in the `cap-camera*` and `scap-*` crate families. See [licenses/LICENSE-MIT](https://github.com/CapSoftware/Cap/blob/main/licenses/LICENSE-MIT).
+- **Third-party** — Licensed under the original license provided by their owner.
+
+Cap is copyright (c) 2023-present Cap Software, Inc. This fork's additional
+changes are provided under the same AGPLv3 terms.
+
+For contributing to Cap itself, see the [upstream repo](https://github.com/CapSoftware/Cap)
+and [CONTRIBUTING.md](https://github.com/CapSoftware/Cap/blob/main/CONTRIBUTING.md).
