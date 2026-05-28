@@ -44,6 +44,7 @@ export async function proxy(request: NextRequest) {
 				path.startsWith("/dashboard") ||
 				path.startsWith("/onboarding") ||
 				path.startsWith("/api") ||
+				path.startsWith("/.well-known/workflow") ||
 				path.startsWith("/login") ||
 				path.startsWith("/signup") ||
 				path.startsWith("/invite") ||

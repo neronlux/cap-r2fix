@@ -17,7 +17,7 @@ const callPattern =
 	/createUploadTargetFor(?:User|Video)\(|\.createUploadTarget\(/g;
 const dryRun = process.env.CAP_R2_PATCH_DRY_RUN === "1";
 const cluePattern =
-	/x-amz-meta-userid|presignedPostData|s3Post|getPresignedPostUrl|raw-upload\.mp4|Presigned URL created successfully/;
+	/x-amz-meta-userid|presignedPostData|s3Post|getPresignedPostUrl|raw-upload\.mp4|Presigned URL created successfully|\.well-known\/workflow|\/verify-otp/;
 
 function hasTargetExtension(path) {
 	for (const extension of targetExtensions) {
@@ -303,6 +303,20 @@ function patchOfficialCompiledInviteAcceptSource(source) {
 	return replaceAll(source, search, replacement);
 }
 
+function patchOfficialCompiledWorkflowProxySource(source) {
+	let replacements = 0;
+	const output = source.replace(
+		/(([A-Za-z_$][\w$]*)\.startsWith\("\/api"\)\|\|)(\2\.startsWith\("\/login"\))/g,
+		(match, prefix, pathVar, loginCheck) => {
+			if (match.includes("/.well-known/workflow")) return match;
+			replacements += 1;
+			return `${prefix}${pathVar}.startsWith("/.well-known/workflow")||${loginCheck}`;
+		},
+	);
+
+	return { output, replacements };
+}
+
 function isStaticChunk(path) {
 	return (
 		path.includes("/apps/web/.next/static/chunks/") && path.endsWith(".js")
@@ -382,13 +396,17 @@ for (const file of walk(root)) {
 	const inviteAcceptPatch = patchOfficialCompiledInviteAcceptSource(
 		otpPatch.output,
 	);
-	const output = inviteAcceptPatch.output;
+	const workflowProxyPatch = patchOfficialCompiledWorkflowProxySource(
+		inviteAcceptPatch.output,
+	);
+	const output = workflowProxyPatch.output;
 	const replacements =
 		namedPatch.replacements +
 		compiledPatch.replacements +
 		emailPatch.replacements +
 		otpPatch.replacements +
-		inviteAcceptPatch.replacements;
+		inviteAcceptPatch.replacements +
+		workflowProxyPatch.replacements;
 	if (replacements > 0) {
 		if (!dryRun) writeFileSync(file, output);
 		if (isStaticChunk(file)) changedStaticChunks.push(file);
@@ -413,12 +431,16 @@ for (const file of walk(root)) {
 	const inviteAcceptPatch = patchOfficialCompiledInviteAcceptSource(
 		otpPatch.output,
 	);
-	const output = inviteAcceptPatch.output;
+	const workflowProxyPatch = patchOfficialCompiledWorkflowProxySource(
+		inviteAcceptPatch.output,
+	);
+	const output = workflowProxyPatch.output;
 	const replacements =
 		compiledPatch.replacements +
 		emailPatch.replacements +
 		otpPatch.replacements +
-		inviteAcceptPatch.replacements;
+		inviteAcceptPatch.replacements +
+		workflowProxyPatch.replacements;
 	if (replacements > 0) {
 		if (!dryRun) writeFileSync(file, output);
 		if (isStaticChunk(file)) changedStaticChunks.push(file);
@@ -439,6 +461,7 @@ let emailSenderEvidence = 0;
 let otpSessionRetryEvidence = 0;
 let inviteAcceptSelfHostedEvidence = 0;
 let remainingInviteSubscriptionGateEvidence = 0;
+let workflowProxyEvidence = 0;
 for (const file of walk(root)) {
 	const { size } = statSync(file);
 	if (size > 20 * 1024 * 1024) continue;
@@ -476,6 +499,8 @@ for (const file of walk(root)) {
 	remainingInviteSubscriptionGateEvidence +=
 		source.match(/Organization owner not found or has no subscription/g)
 			?.length ?? 0;
+	workflowProxyEvidence +=
+		source.match(/startsWith\("\/\.well-known\/workflow"\)/g)?.length ?? 0;
 }
 
 console.log(
@@ -493,6 +518,7 @@ console.log(
 		otpSessionRetryEvidence,
 		inviteAcceptSelfHostedEvidence,
 		remainingInviteSubscriptionGateEvidence,
+		workflowProxyEvidence,
 	}),
 );
 
@@ -504,7 +530,8 @@ if (
 	emailSenderEvidence < 3 ||
 	otpSessionRetryEvidence < 1 ||
 	inviteAcceptSelfHostedEvidence < 1 ||
-	remainingInviteSubscriptionGateEvidence > 0
+	remainingInviteSubscriptionGateEvidence > 0 ||
+	workflowProxyEvidence < 1
 ) {
 	const clues = [];
 	for (const file of walk(root)) {
