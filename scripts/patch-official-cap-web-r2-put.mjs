@@ -255,6 +255,11 @@ function patchOfficialCompiledSource(source) {
 		"d.send(l)",
 	);
 
+	apply(
+		"body:k});if(d.ok)return;let e=await d.text();if(503===d.status",
+		"body:Buffer.from(k)});if(d.ok)return;let e=await d.text();if(503===d.status",
+	);
+
 	return { output, replacements };
 }
 

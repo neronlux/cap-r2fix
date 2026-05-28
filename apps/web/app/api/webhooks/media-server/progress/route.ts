@@ -187,6 +187,23 @@ export async function POST(request: NextRequest) {
 					})
 					.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
 			} else {
+				if (currentVideo && currentUpload?.rawFileKey) {
+					Effect.gen(function* () {
+						const [bucket] = yield* Storage.getAccessForVideo(
+							decodeStorageVideo(currentVideo),
+						);
+						yield* bucket.deleteObject(currentUpload.rawFileKey);
+					})
+						.pipe(runPromise)
+						.catch((err) => {
+							console.warn(
+								"[media-server-webhook] Failed to clean up raw upload for %s:",
+								payload.videoId,
+								err,
+							);
+						});
+				}
+
 				await db()
 					.delete(videoUploads)
 					.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));

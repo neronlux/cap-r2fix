@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const updateWhereMock = vi.fn();
 const selectWhereMock = vi.fn();
 const startMock = vi.fn();
+const directStartMock = vi.fn();
+const serverEnvMock = vi.fn();
 
 const dbMock = vi.fn(() => ({
 	update: vi.fn(() => ({
@@ -21,6 +23,10 @@ vi.mock("@cap/database", () => ({
 	db: dbMock,
 }));
 
+vi.mock("@cap/env", () => ({
+	serverEnv: serverEnvMock,
+}));
+
 vi.mock("server-only", () => ({}));
 
 vi.mock("workflow/api", () => ({
@@ -29,11 +35,17 @@ vi.mock("workflow/api", () => ({
 
 vi.mock("@/workflows/process-video", () => ({
 	processVideoWorkflow: Symbol("processVideoWorkflow"),
+	startVideoProcessingOnMediaServer: directStartMock,
 }));
 
 describe("video processing starts", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		delete process.env.VERCEL;
+		serverEnvMock.mockReturnValue({
+			MEDIA_SERVER_URL: undefined,
+			WORKFLOWS_RPC_URL: undefined,
+		});
 	});
 
 	it("does not start a duplicate workflow when processing is already running", async () => {
@@ -85,6 +97,34 @@ describe("video processing starts", () => {
 		).resolves.toBe("started");
 
 		expect(startMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("starts the media server directly for self-hosted deployments", async () => {
+		updateWhereMock.mockResolvedValueOnce({ affectedRows: 1 });
+		directStartMock.mockResolvedValueOnce(undefined);
+		serverEnvMock.mockReturnValue({
+			MEDIA_SERVER_URL: "http://cap-media-server:3456",
+			WORKFLOWS_RPC_URL: undefined,
+		});
+
+		const { startVideoProcessingWorkflow } = await import(
+			"@/lib/video-processing"
+		);
+
+		await expect(
+			startVideoProcessingWorkflow({
+				videoId: "video-123" as never,
+				userId: "user-123",
+				rawFileKey: "user-123/video-123/raw-upload.webm",
+				bucketId: null,
+				processingMessage: "Starting video processing...",
+				startFailureMessage: "Video processing could not start.",
+				mode: "multipart",
+			}),
+		).resolves.toBe("started");
+
+		expect(directStartMock).toHaveBeenCalledTimes(1);
+		expect(startMock).not.toHaveBeenCalled();
 	});
 
 	it("starts the workflow when mysql returns affectedRows in the first tuple slot", async () => {

@@ -8,7 +8,7 @@ import { FatalError } from "workflow";
 import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
 
-interface ProcessVideoWorkflowPayload {
+export interface ProcessVideoWorkflowPayload {
 	videoId: string;
 	userId: string;
 	rawFileKey: string;
@@ -225,6 +225,31 @@ async function processVideoOnMediaServer(
 ): Promise<MediaServerProcessResult> {
 	"use step";
 
+	await startMediaServerProcessingForUpload(
+		videoId,
+		userId,
+		rawFileKey,
+		_bucketId,
+	);
+
+	return await waitForProcessingCompletion(videoId);
+}
+
+export async function startVideoProcessingOnMediaServer(
+	payload: ProcessVideoWorkflowPayload,
+): Promise<void> {
+	const { videoId, userId, rawFileKey, bucketId } = payload;
+
+	await validateProcessingRequest(videoId, rawFileKey);
+	await startMediaServerProcessingForUpload(videoId, userId, rawFileKey, bucketId);
+}
+
+async function startMediaServerProcessingForUpload(
+	videoId: string,
+	userId: string,
+	rawFileKey: string,
+	_bucketId: string | null,
+): Promise<string> {
 	const mediaServerUrl = serverEnv().MEDIA_SERVER_URL;
 	const webhookBaseUrl =
 		serverEnv().MEDIA_SERVER_WEBHOOK_URL || serverEnv().WEB_URL;
@@ -301,7 +326,7 @@ async function processVideoOnMediaServer(
 		})
 		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
 
-	await startMediaServerProcessJob(mediaServerUrl, {
+	return await startMediaServerProcessJob(mediaServerUrl, {
 		videoId,
 		userId,
 		videoUrl: rawVideoUrl,
@@ -312,8 +337,6 @@ async function processVideoOnMediaServer(
 		webhookSecret: webhookSecret || undefined,
 		inputExtension: getInputExtension(rawFileKey),
 	});
-
-	return await waitForProcessingCompletion(videoId);
 }
 
 function getMetadataFromVideoRow(
