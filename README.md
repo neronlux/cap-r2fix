@@ -2,68 +2,144 @@
 	<img width="150" height="150" src="https://github.com/CapSoftware/Cap/blob/main/apps/desktop/src-tauri/icons/Square310x310Logo.png" alt="Cap logo">
 </p>
 
-<h1 align="center">Cap</h1>
+<h1 align="center">Cap — R2 Fix Fork</h1>
 
 <p align="center">
-	Beautiful, shareable screen recordings. Open source, fast, and built for teams that want to own their data.
+	Fork of <a href="https://github.com/CapSoftware/Cap">Cap</a> with patches for self-hosted deployment on <strong>Coolify</strong> with <strong>Cloudflare R2</strong> storage.
 </p>
 
 <p align="center">
-	<a href="https://cap.so">Website</a>
-	 |
-	<a href="https://cap.so/download">Download</a>
+	<a href="https://github.com/CapSoftware/Cap">Upstream</a>
 	 |
 	<a href="https://cap.so/docs">Docs</a>
 	 |
 	<a href="https://cap.so/pricing">Pricing</a>
-	 |
-	<a href="https://cap.link/discord">Discord</a>
 </p>
 
-<p align="center">
-	<a href="https://console.algora.io/org/CapSoftware/bounties?status=open">
-		<img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fconsole.algora.io%2Fapi%2Fshields%2FCapSoftware%2Fbounties%3Fstatus%3Dopen" alt="Open bounties">
-	</a>
-</p>
+---
 
-<img src="https://raw.githubusercontent.com/CapSoftware/Cap/refs/heads/main/apps/web/public/landing-cover.png" alt="Cap app preview">
+This is a personal fork of [Cap](https://github.com/CapSoftware/Cap) maintained by [@neronlux](https://github.com/neronlux). It is **not** affiliated with Cap Software.
 
-Cap is the open source alternative to Loom. It gives you fast screen recording, polished local editing, instant share links, comments, transcripts, analytics, team workspaces, custom domains, custom S3 storage, and full self-hosting when you need complete control.
+The upstream Cap project is the open source alternative to Loom — beautiful, shareable screen recordings built for teams that want to own their data.
 
-Use Cap for product demos, bug reports, onboarding, tutorials, design reviews, engineering walkthroughs, async standups, client updates, and any moment where showing the work is faster than scheduling another call.
+## What This Fork Adds
 
-## Why Cap
+This fork carries compatibility patches that make the **stock upstream Cap web image** work correctly when self-hosted on [Coolify](https://coolify.io/) with [Cloudflare R2](https://developers.cloudflare.com/r2/) as the S3-compatible object store.
 
-- **Record, edit, share.** Capture your screen, camera, and microphone, then share a link or export a finished video.
-- **Instant Mode for speed.** Upload while recording and get a shareable link the moment you stop.
-- **Studio Mode for polish.** Record locally, edit with backgrounds, zooms, trimming, captions, and export controls.
-- **Desktop apps for your team.** Cap runs on macOS and Windows, with a web dashboard for viewing, sharing, and managing recordings.
-- **Own your storage.** Use Cap Cloud, connect your own S3-compatible bucket, keep recordings local, or self-host the full platform.
-- **Privacy by default.** Share publicly or privately, add passwords, use your own domain, or keep sensitive recordings off hosted infrastructure.
-- **Async collaboration.** Comments, reactions, transcripts, viewer analytics, and team workspaces keep feedback attached to the video.
-- **Cap AI.** Generate titles, summaries, clickable chapters, captions, and transcripts automatically.
-- **Move from Loom.** Import existing Loom videos into Cap and keep your library in one place.
+### Problems Solved
 
-## Recording Modes
+| Problem | Fix |
+| --- | --- |
+| Browser uploads to R2 stored wrong payload (form object instead of file) | Patches compiled upload code to use presigned `PUT` URLs and send the actual file body |
+| `/.well-known/workflow` routes blocked by the self-hosted proxy | Allowlist added in `apps/web/proxy.ts` and via compiled-image patch |
+| Video processing stuck at 0% — media server never called | Workflow dispatch patched to send `x-media-server-secret` header and `webhookSecret` body from `MEDIA_SERVER_WEBHOOK_SECRET` |
+| Raw upload objects never cleaned up after processing | Added cleanup in `apps/web/app/api/webhooks/media-server/progress/route.ts` |
+| OTP login race condition — session not ready after callback | Retry loop with `cache: "no-store"` in `apps/web/app/(org)/verify-otp/form.tsx` |
+| Invite acceptance blocked by Stripe subscription gate | Patched compiled invite-accept handler to skip subscription check |
+| Resend email sender not configurable per-address | Added `RESEND_FROM_EMAIL` env var (`packages/env/server.ts`, `packages/database/emails/config.ts`) |
+
+### How It Works
+
+Two deployment strategies are supported:
+
+1. **Patched stock image (recommended)** — `infra/cap-web-stock-r2fix.Dockerfile` takes the official `ghcr.io/capsoftware/cap-web:latest` image and applies `scripts/patch-official-cap-web-r2-put.mjs` at build time. This patches the compiled JavaScript in-place without requiring a full source build.
+
+2. **Source build** — The source-level fixes in `apps/web/proxy.ts`, `apps/web/app/(org)/verify-otp/form.tsx`, and the email/env packages are applied directly when building from source.
+
+### Key Files
+
+| Path | Purpose |
+| --- | --- |
+| `infra/cap-web-stock-r2fix.Dockerfile` | Dockerfile that layers the patch onto the stock image |
+| `scripts/patch-official-cap-web-r2-put.mjs` | Patch script applied during stock-image build |
+| `infra/self-hosted-r2-workflow-fixes.md` | Detailed runbook: diagnostics, stuck-row recovery, build checklist |
+| `.github/workflows/docker-build-stock-r2fix.yml` | CI workflow that builds and publishes the patched image to GHCR |
+| `docker-compose.coolify.yml` | Coolify-ready compose file |
+
+## Self-Hosting with Coolify + R2
+
+### Prerequisites
+
+- A [Coolify](https://coolify.io/) instance
+- A Cloudflare R2 bucket (or other S3-compatible store)
+- A Resend API key (optional, for email login)
+
+### Deploy
+
+1. Push the `cap-web-stock-r2fix` image to your GHCR registry via the `Docker Build Stock R2 Fix` workflow, or pull `ghcr.io/neronlux/cap-web-stock-r2fix:latest`.
+2. In Coolify, use `docker-compose.coolify.yml` as the compose source (swap MinIO for your R2 endpoint).
+3. Configure environment variables:
+
+```bash
+WEB_URL=https://cap.yourdomain.com
+NEXTAUTH_URL=https://cap.yourdomain.com
+NEXTAUTH_SECRET=<generate-a-secret>
+DATABASE_ENCRYPTION_KEY=<generate-a-secret>
+DATABASE_URL=mysql://cap:<password>@mysql:3306/cap
+
+# R2 / S3
+CAP_AWS_ACCESS_KEY=<r2-access-key-id>
+CAP_AWS_SECRET_KEY=<r2-secret-access-key>
+CAP_AWS_BUCKET=<bucket-name>
+CAP_AWS_REGION=auto
+S3_PUBLIC_ENDPOINT=https://<bucket>.<account>.r2.cloudflarestorage.com
+S3_INTERNAL_ENDPOINT=https://<bucket>.<account>.r2.cloudflarestorage.com
+
+# Media server
+MEDIA_SERVER_URL=http://media-server:3456
+MEDIA_SERVER_WEBHOOK_SECRET=<shared-secret>
+MEDIA_SERVER_WEBHOOK_URL=http://cap-web:3000
+
+# Email (optional)
+RESEND_API_KEY=re_xxxxxxxx
+RESEND_FROM_DOMAIN=yourdomain.com
+RESEND_FROM_EMAIL=Cap <cap@yourdomain.com>
+```
+
+4. Verify the patches are active inside the running container:
+
+```sh
+docker exec cap-web sh -lc 'node -e "
+const fs = require(\"fs\");
+const proxy = fs.readFileSync(\"/app/apps/web/.next/server/middleware.js\", \"utf8\");
+const step = fs.readFileSync(\"/app/apps/web/.next/server/app/.well-known/workflow/v1/step/route.js\", \"utf8\");
+console.log(\"proxyPatch=\" + proxy.includes(\"/.well-known/workflow\"));
+console.log(\"workflowHeaderPatch=\" + step.includes(\"x-media-server-secret\"));
+console.log(\"workflowBodyPatch=\" + step.includes(\"webhookSecret:process.env.MEDIA_SERVER_WEBHOOK_SECRET||void 0\"));
+"'
+```
+
+All three should report `true`.
+
+### Diagnostics
+
+See [infra/self-hosted-r2-workflow-fixes.md](infra/self-hosted-r2-workflow-fixes.md) for:
+- Diagnosing stuck processing rows
+- Recovering stale uploads
+- Build and deploy checklist
+
+## Upstream Documentation
+
+The sections below are from the upstream Cap project. They apply to this fork unless noted otherwise.
+
+<details>
+<summary><strong>Recording Modes, Data Ownership, Get Started</strong></summary>
+
+### Recording Modes
 
 | Mode | Best for | How it works |
 | --- | --- | --- |
 | Instant Mode | Fast feedback, bug reports, async updates | Cap uploads while you record, then gives you a share link as soon as recording stops. |
 | Studio Mode | Product demos, tutorials, launches, client work | Cap records locally, opens the editor, and lets you export or share a polished video. |
 
-## Data Ownership
+### Data Ownership
 
-Cap is designed for people and teams who do not want their recording workflow locked inside a black box.
-
-- Use Cap Cloud for the fastest hosted experience.
-- Connect AWS S3, Cloudflare R2, Backblaze B2, MinIO, Wasabi, or another S3-compatible provider.
+- Connect Cloudflare R2, AWS S3, Backblaze B2, MinIO, Wasabi, or another S3-compatible provider.
 - Serve share pages from your own domain.
 - Self-host Cap Web, the API, database, media server, and object storage with Docker Compose.
 - Point Cap Desktop at your self-hosted instance from `Settings > Cap Server URL`.
 
-## Get Started
-
-For most users, the fastest path is:
+### Get Started (hosted)
 
 1. Download Cap for macOS or Windows from [cap.so/download](https://cap.so/download).
 2. Sign in or create an account.
@@ -71,49 +147,7 @@ For most users, the fastest path is:
 4. Record your first Cap.
 5. Share the link, export the file, or keep it local.
 
-The full product docs live at [cap.so/docs](https://cap.so/docs).
-
-## Self-Hosting
-
-The fastest way to self-host Cap Web is Docker Compose:
-
-```bash
-git clone https://github.com/CapSoftware/Cap.git
-cd Cap
-docker compose up -d
-```
-
-Cap will be available at `http://localhost:3000`.
-
-Login links appear in the service logs when email is not configured:
-
-```bash
-docker compose logs cap-web
-```
-
-### Deployment Options
-
-| Method | Best for |
-| --- | --- |
-| Docker Compose | VPS, home servers, and any Docker-capable host |
-| [Railway](https://railway.com/new/template/PwpGcf) | One-click managed hosting |
-| Coolify | Self-hosted PaaS deployments with `docker-compose.coolify.yml` |
-
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/PwpGcf)
-
-For production, configure public URLs and replace the default secrets before exposing the deployment to the internet:
-
-```bash
-CAP_URL=https://cap.yourdomain.com
-S3_PUBLIC_URL=https://s3.yourdomain.com
-```
-
-See the [self-hosting guide](https://cap.so/docs/self-hosting) for email setup, AI providers, SSL, storage, production hardening, and troubleshooting.
-
-This fork also includes stock-image patches for Coolify/self-hosted R2 uploads
-and media processing. See
-[infra/self-hosted-r2-workflow-fixes.md](infra/self-hosted-r2-workflow-fixes.md)
-before rebuilding or troubleshooting the patched image.
+</details>
 
 ## Local Development
 
@@ -179,24 +213,9 @@ Database commands:
 
 The web API uses Effect and `@effect/platform` HTTP APIs. Desktop capture and export paths are backed by Rust crates for fast recording, rendering, and platform-specific media access.
 
-## Analytics
-
-Cap uses [Tinybird](https://www.tinybird.co) for viewer telemetry dashboards. Set `TINYBIRD_ADMIN_TOKEN` or `TINYBIRD_TOKEN` before running analytics commands.
-
-| Command | Purpose |
-| --- | --- |
-| `pnpm analytics:setup` | Deploy Tinybird datasources and pipes from `scripts/analytics/tinybird` |
-| `pnpm analytics:check` | Validate that the Tinybird workspace matches the app expectations |
-
-`analytics:setup` can remove Tinybird resources outside the checked-in analytics configuration. Use it only against the workspace you intend to manage from this repo.
-
 ## Contributing
 
-Cap is built in public. Issues, pull requests, design feedback, bug reports, docs fixes, and bounties are welcome.
-
-- Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
-- Join the community on [Discord](https://cap.link/discord).
-- Check open bounties on [Algora](https://console.algora.io/org/CapSoftware/bounties?status=open).
+This is a personal-use fork. For contributing to Cap itself, see the [upstream repo](https://github.com/CapSoftware/Cap) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

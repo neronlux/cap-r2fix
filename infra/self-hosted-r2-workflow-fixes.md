@@ -6,7 +6,8 @@ backend.
 
 The fixes are applied by `scripts/patch-official-cap-web-r2-put.mjs` during the
 stock-image build. Keep this runbook with that script; the deployed image can be
-rebuilt from the repo without redoing manual container edits.
+rebuilt from the repo without redoing manual container edits. The Dockerfile
+pins a specific upstream tag for reproducibility — update it when upgrading Cap.
 
 ## Why These Patches Exist
 
@@ -141,11 +142,12 @@ video row was deleted, mark the upload as errored rather than retrying.
 
 ## Build And Deploy Checklist
 
-1. Run `node --check scripts/patch-official-cap-web-r2-put.mjs`.
-2. Run `git diff --check`.
-3. Commit and push the patch.
-4. Confirm `Docker Build Stock R2 Fix` succeeds.
-5. Pull/recreate `cap-web` in Coolify.
-6. Verify `proxyPatch`, `workflowHeaderPatch`, and `workflowBodyPatch` are all
+1. Confirm `infra/cap-web-stock-r2fix.Dockerfile` pins the desired upstream tag.
+2. Run `node --check scripts/patch-official-cap-web-r2-put.mjs`.
+3. Run `git diff --check`.
+4. Commit and push the patch.
+5. Confirm `Docker Build Stock R2 Fix` succeeds.
+6. Pull/recreate `cap-web` in Coolify.
+7. Verify `proxyPatch`, `workflowHeaderPatch`, and `workflowBodyPatch` are all
    `true`.
-7. Upload a fresh video and confirm `video_uploads` clears after processing.
+8. Upload a fresh video and confirm `video_uploads` clears after processing.

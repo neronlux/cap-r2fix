@@ -189,20 +189,21 @@ export async function POST(request: NextRequest) {
 			} else {
 				const rawFileKey = currentUpload?.rawFileKey;
 				if (currentVideo && rawFileKey) {
-					Effect.gen(function* () {
-						const [bucket] = yield* Storage.getAccessForVideo(
-							decodeStorageVideo(currentVideo),
-						);
-						yield* bucket.deleteObject(rawFileKey);
-					})
-						.pipe(runPromise)
-						.catch((err) => {
-							console.warn(
-								"[media-server-webhook] Failed to clean up raw upload for %s:",
-								payload.videoId,
-								err,
+					try {
+						await Effect.gen(function* () {
+							const [bucket] = yield* Storage.getAccessForVideo(
+								decodeStorageVideo(currentVideo),
 							);
-						});
+							yield* bucket.deleteObject(rawFileKey);
+						}).pipe(runPromise);
+					} catch (err) {
+						console.warn(
+							"[media-server-webhook] Failed to clean up raw upload for %s, leaving DB row for retry:",
+							payload.videoId,
+							err,
+						);
+						return NextResponse.json({ success: true, cleanupFailed: true });
+					}
 				}
 
 				await db()

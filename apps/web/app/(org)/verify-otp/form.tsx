@@ -11,6 +11,24 @@ import { signIn } from "next-auth/react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
+async function waitForSessionUser() {
+	for (let attempt = 0; attempt < 8; attempt++) {
+		const sessionRes = await fetch("/api/auth/session", {
+			cache: "no-store",
+			credentials: "include",
+		});
+
+		if (sessionRes.ok) {
+			const session = await sessionRes.json();
+			if (session?.user) return session.user;
+		}
+
+		await new Promise((resolve) => setTimeout(resolve, 250));
+	}
+
+	return null;
+}
+
 export function VerifyOTPForm({
 	email,
 	next,
@@ -74,23 +92,6 @@ export function VerifyOTPForm({
 	const resetCodeInput = () => {
 		setCode(["", "", "", "", "", ""]);
 		inputRefs.current[0]?.focus();
-	};
-	const waitForSessionUser = async () => {
-		for (let attempt = 0; attempt < 8; attempt++) {
-			const sessionRes = await fetch("/api/auth/session", {
-				cache: "no-store",
-				credentials: "include",
-			});
-
-			if (sessionRes.ok) {
-				const session = await sessionRes.json();
-				if (session?.user) return session.user;
-			}
-
-			await new Promise((resolve) => setTimeout(resolve, 250));
-		}
-
-		return null;
 	};
 
 	const handleVerify = useMutation({
@@ -157,8 +158,7 @@ export function VerifyOTPForm({
 		},
 		onSuccess: () => {
 			toast.success("A new code has been sent to your email!");
-			setCode(["", "", "", "", "", ""]);
-			inputRefs.current[0]?.focus();
+			resetCodeInput();
 			setLastResendTime(Date.now());
 		},
 		onError: (e) => {

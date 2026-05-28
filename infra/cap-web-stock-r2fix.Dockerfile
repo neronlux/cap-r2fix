@@ -1,4 +1,6 @@
-FROM ghcr.io/capsoftware/cap-web:latest
+# Pin to a specific upstream tag for reproducible builds.
+# Update this when upgrading Cap upstream.
+FROM ghcr.io/capsoftware/cap-web:v0.15.1
 
 USER root
 
