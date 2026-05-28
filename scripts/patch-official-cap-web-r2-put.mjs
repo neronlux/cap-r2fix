@@ -17,7 +17,7 @@ const callPattern =
 	/createUploadTargetFor(?:User|Video)\(|\.createUploadTarget\(/g;
 const dryRun = process.env.CAP_R2_PATCH_DRY_RUN === "1";
 const cluePattern =
-	/x-amz-meta-userid|presignedPostData|s3Post|getPresignedPostUrl|raw-upload\.mp4|Presigned URL created successfully|\.well-known\/workflow|\/verify-otp/;
+	/x-amz-meta-userid|presignedPostData|s3Post|getPresignedPostUrl|raw-upload\.mp4|Presigned URL created successfully|\.well-known\/workflow|\/verify-otp|\/video\/process|x-media-server-secret/;
 
 function hasTargetExtension(path) {
 	for (const extension of targetExtensions) {
@@ -317,6 +317,35 @@ function patchOfficialCompiledWorkflowProxySource(source) {
 	return { output, replacements };
 }
 
+function patchOfficialCompiledMediaServerAuthSource(source) {
+	let replacements = 0;
+	const output = source.replace(
+		/fetch\(`\$\{([A-Za-z_$][\w$]*)\}\/video\/process`,\{method:"POST",headers:\{"Content-Type":"application\/json"\},body:JSON\.stringify\(\{videoId:([A-Za-z_$][\w$]*),userId:([A-Za-z_$][\w$]*),videoUrl:([A-Za-z_$][\w$]*),outputPresignedUrl:([A-Za-z_$][\w$]*),thumbnailPresignedUrl:([A-Za-z_$][\w$]*),webhookUrl:([A-Za-z_$][\w$]*)\}\)\}\)/g,
+		(
+			match,
+			mediaServerUrl,
+			videoId,
+			userId,
+			videoUrl,
+			outputPresignedUrl,
+			thumbnailPresignedUrl,
+			webhookUrl,
+		) => {
+			if (
+				match.includes("x-media-server-secret") ||
+				match.includes("webhookSecret")
+			) {
+				return match;
+			}
+
+			replacements += 1;
+			return `fetch(\`\${${mediaServerUrl}}/video/process\`,{method:"POST",headers:{"Content-Type":"application/json",...(process.env.MEDIA_SERVER_WEBHOOK_SECRET?{"x-media-server-secret":process.env.MEDIA_SERVER_WEBHOOK_SECRET}:{})},body:JSON.stringify({videoId:${videoId},userId:${userId},videoUrl:${videoUrl},outputPresignedUrl:${outputPresignedUrl},thumbnailPresignedUrl:${thumbnailPresignedUrl},webhookUrl:${webhookUrl},webhookSecret:process.env.MEDIA_SERVER_WEBHOOK_SECRET||void 0})})`;
+		},
+	);
+
+	return { output, replacements };
+}
+
 function isStaticChunk(path) {
 	return (
 		path.includes("/apps/web/.next/static/chunks/") && path.endsWith(".js")
@@ -399,14 +428,18 @@ for (const file of walk(root)) {
 	const workflowProxyPatch = patchOfficialCompiledWorkflowProxySource(
 		inviteAcceptPatch.output,
 	);
-	const output = workflowProxyPatch.output;
+	const mediaServerAuthPatch = patchOfficialCompiledMediaServerAuthSource(
+		workflowProxyPatch.output,
+	);
+	const output = mediaServerAuthPatch.output;
 	const replacements =
 		namedPatch.replacements +
 		compiledPatch.replacements +
 		emailPatch.replacements +
 		otpPatch.replacements +
 		inviteAcceptPatch.replacements +
-		workflowProxyPatch.replacements;
+		workflowProxyPatch.replacements +
+		mediaServerAuthPatch.replacements;
 	if (replacements > 0) {
 		if (!dryRun) writeFileSync(file, output);
 		if (isStaticChunk(file)) changedStaticChunks.push(file);
@@ -434,13 +467,17 @@ for (const file of walk(root)) {
 	const workflowProxyPatch = patchOfficialCompiledWorkflowProxySource(
 		inviteAcceptPatch.output,
 	);
-	const output = workflowProxyPatch.output;
+	const mediaServerAuthPatch = patchOfficialCompiledMediaServerAuthSource(
+		workflowProxyPatch.output,
+	);
+	const output = mediaServerAuthPatch.output;
 	const replacements =
 		compiledPatch.replacements +
 		emailPatch.replacements +
 		otpPatch.replacements +
 		inviteAcceptPatch.replacements +
-		workflowProxyPatch.replacements;
+		workflowProxyPatch.replacements +
+		mediaServerAuthPatch.replacements;
 	if (replacements > 0) {
 		if (!dryRun) writeFileSync(file, output);
 		if (isStaticChunk(file)) changedStaticChunks.push(file);
@@ -462,6 +499,7 @@ let otpSessionRetryEvidence = 0;
 let inviteAcceptSelfHostedEvidence = 0;
 let remainingInviteSubscriptionGateEvidence = 0;
 let workflowProxyEvidence = 0;
+let workflowMediaServerAuthEvidence = 0;
 for (const file of walk(root)) {
 	const { size } = statSync(file);
 	if (size > 20 * 1024 * 1024) continue;
@@ -501,6 +539,10 @@ for (const file of walk(root)) {
 			?.length ?? 0;
 	workflowProxyEvidence +=
 		source.match(/startsWith\("\/\.well-known\/workflow"\)/g)?.length ?? 0;
+	workflowMediaServerAuthEvidence +=
+		source.match(
+			/webhookSecret:process\.env\.MEDIA_SERVER_WEBHOOK_SECRET\|\|void 0/g,
+		)?.length ?? 0;
 }
 
 console.log(
@@ -519,6 +561,7 @@ console.log(
 		inviteAcceptSelfHostedEvidence,
 		remainingInviteSubscriptionGateEvidence,
 		workflowProxyEvidence,
+		workflowMediaServerAuthEvidence,
 	}),
 );
 
@@ -531,7 +574,8 @@ if (
 	otpSessionRetryEvidence < 1 ||
 	inviteAcceptSelfHostedEvidence < 1 ||
 	remainingInviteSubscriptionGateEvidence > 0 ||
-	workflowProxyEvidence < 1
+	workflowProxyEvidence < 1 ||
+	workflowMediaServerAuthEvidence < 1
 ) {
 	const clues = [];
 	for (const file of walk(root)) {
