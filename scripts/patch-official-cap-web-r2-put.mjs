@@ -224,7 +224,7 @@ function patchOfficialCompiledSource(source) {
 		'r.open("POST",l.presignedPostData.url)',
 		'r.open("PUT",l.presignedPostData.url),r.setRequestHeader("Content-Type","video/mp4")',
 		"r.send(d)",
-		"r.send(e)",
+		'r.send(d.get("file"))',
 	);
 
 	applyPair(
@@ -306,8 +306,8 @@ function isStaticChunk(path) {
 
 function cacheBustedChunkName(file) {
 	const name = basename(file);
-	if (name.endsWith(".r2fix.js")) return null;
-	return name.replace(/\.js$/, ".r2fix.js");
+	if (name.endsWith(".r2fix.js") || name.endsWith(".r2fix2.js")) return null;
+	return name.replace(/\.js$/, ".r2fix2.js");
 }
 
 function cacheBustStaticChunks(files) {
